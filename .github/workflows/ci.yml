@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Smoke test (CLI)
+        run: |
+          python demo_cli.py '{"price_start_local":300,"pickup_in_meters":400,"order_hour":18,"order_dow":4}'
+
+      - name: Start API
+        run: |
+          nohup uvicorn app_fastapi:app --host 0.0.0.0 --port 8080 &
+          sleep 5
+
+      - name: Call /recommend
+        run: |
+          curl -s -X POST http://localhost:8080/recommend             -H "Content-Type: application/json"             -d '{"price_start_local":300,"pickup_in_meters":400,"order_hour":18,"order_dow":4}'
+
+      - name: Mini-batch prediction
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          df = pd.DataFrame([{"order_id":1,"price_start_local":300,"pickup_in_meters":400,"order_hour":18,"order_dow":4}])
+          df.to_csv("mini.csv", index=False)
+          PY
+          python batch_predict.py mini.csv predictions.csv
+
+      - name: Upload predictions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: predictions
+          path: predictions.csv
