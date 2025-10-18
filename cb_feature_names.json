@@ -1,19 +1,28 @@
-[
-  "distance_in_meters",
-  "duration_in_seconds",
-  "pickup_in_meters",
-  "pickup_in_seconds",
-  "price_start_local",
-  "price_bid_local",
-  "order_hour",
-  "order_dow",
-  "is_weekend",
-  "lag_tender_seconds",
-  "driver_tenure_days",
-  "bid_uplift_abs",
-  "bid_uplift_pct",
-  "centrality_proxy",
-  "carmodel",
-  "carname",
-  "platform"
-]
+{
+  "cat": [
+    "carmodel",
+    "carname",
+    "platform"
+  ],
+  "num": [
+    "distance_in_meters",
+    "duration_in_seconds",
+    "pickup_in_meters",
+    "pickup_in_seconds",
+    "price_start_local",
+    "price_bid_local",
+    "driver_rating",
+    "order_hour",
+    "order_dow",
+    "is_weekend",
+    "lag_tender_seconds",
+    "driver_tenure_days",
+    "bid_uplift_abs",
+    "bid_uplift_pct",
+    "centrality_proxy",
+    "te_order_id",
+    "te_tender_id",
+    "te_driver_id",
+    "te_user_id"
+  ]
+}

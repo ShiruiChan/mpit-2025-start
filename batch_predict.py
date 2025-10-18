@@ -1,45 +1,40 @@
-import sys, pandas as pd, numpy as np
-from joblib import load
-from autobid_utils import feature_candidates, recommend_bid_for_row
+
+import os, sys, pandas as pd
+from autobid_utils_robust import load_artifacts, recommend_bid_for_row, _log
 
 def main():
     if len(sys.argv) < 3:
         print("Usage: python batch_predict.py input.csv output.csv")
         return
-    inp, out = sys.argv[1], sys.argv[2]
+    inp, outp = sys.argv[1], sys.argv[2]
+    _log(f"Reading input CSV: {inp}")
     df = pd.read_csv(inp)
-    # базовые фичи, если нет — заполним
-    if "order_timestamp" in df.columns:
-        df["order_timestamp"] = pd.to_datetime(df["order_timestamp"], errors="coerce")
-        df["order_hour"] = df["order_timestamp"].dt.hour
-        df["order_dow"]  = df["order_timestamp"].dt.dayofweek
-        df["is_weekend"] = df["order_dow"].isin([5,6]).astype(int)
-    if "driver_reg_date" in df.columns:
-        df["driver_reg_date"] = pd.to_datetime(df["driver_reg_date"], errors="coerce")
-        if "order_timestamp" in df.columns:
-            df["driver_tenure_days"] = (df["order_timestamp"] - df["driver_reg_date"]).dt.days.clip(lower=0)
-    if "tender_timestamp" in df.columns and "order_timestamp" in df.columns:
-        df["tender_timestamp"] = pd.to_datetime(df["tender_timestamp"], errors="coerce")
-        df["lag_tender_seconds"] = (df["tender_timestamp"] - df["order_timestamp"]).dt.total_seconds().clip(lower=0)
-
-    df["centrality_proxy"] = -df.get("pickup_in_meters", pd.Series([np.nan]*len(df)))
-
-    model = load("autobid_acceptance_model.joblib")
-    rec_prices, rec_probs, rec_er = [], [], []
-    for _, r in df.iterrows():
-        best = recommend_bid_for_row(r, model)
-        rec_prices.append(best["price"])
-        rec_probs.append(best["p_accept"])
-        rec_er.append(best["er"])
-
-    out_df = pd.DataFrame({
-        "order_id": df.get("order_id", range(len(df))),
-        "recommended_price_bid_local": rec_prices,
-        "p_accept": rec_probs,
-        "expected_revenue": rec_er
-    })
-    out_df.to_csv(out, index=False)
-    print(f"Wrote: {out}")
+    model, fns, calibrator, te_maps = load_artifacts("autobid_catboost.cbm", "cb_feature_names.json", "autobid_isotonic.joblib", "cb_te_maps.json")
+    _log(f"Input shape: {df.shape}")
+    rows = []
+    n = len(df)
+    use_tqdm = False
+    # базовый итератор всегда один и тот же
+    base_iter = df.iterrows()  # -> (idx, row)
+    try:
+        from tqdm import tqdm  # type: ignore
+        it = tqdm(base_iter, total=n, ncols=80)
+        use_tqdm = True
+    except Exception:
+        it = base_iter
+    for i, (idx, row) in enumerate(it):
+        try:
+            best = recommend_bid_for_row(row, model, fns, calibrator, te_maps)
+            rows.append({"price": best["price"], "p_accept": best["p_accept"], "er": best["er"]})
+        except Exception as e:
+            _log(f"Row {i}: ERROR {type(e).__name__}: {e}")
+            rows.append({"price": float("nan"), "p_accept": float("nan"), "er": float("nan")})
+        if not use_tqdm:
+            # односложный прогресс в той же строке
+            pct = (i + 1) * 100 // max(1, n)
+            print(f"\rProgress: {i+1}/{n} ({pct}%)", end="", flush=True)
+    if not use_tqdm:
+        print()  # перенос после прогресса
 
 if __name__ == "__main__":
     main()
