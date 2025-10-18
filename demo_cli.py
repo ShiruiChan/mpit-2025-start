@@ -62,7 +62,6 @@ def ensure_all_features(row: pd.Series) -> pd.Series:
         row["centrality_proxy"] = -row["pickup_in_meters"]
     row["is_weekend"] = int(int(row["order_dow"]) in (5,6))
 
-    # категории → строки без NaN
     for c in CAT_COLS:
         if c not in row or pd.isna(row[c]):
             row[c] = "unknown"
@@ -143,7 +142,7 @@ def mood_phrase(p):
     if p >= 0.35: return "💬 Осторожно: может не зайти."
     return "💬 Сомнительно — лучше снизить цену."
 
-# ---------- Табличный принтер ----------
+# ---------- Таблица ----------
 def print_table(headers, rows):
     widths = [len(h) for h in headers]
     for r in rows:
@@ -157,7 +156,6 @@ def print_table(headers, rows):
 
 # ---------- Парсинг аргументов ----------
 def parse_args_payload():
-    # 1) Один позиционный JSON/py-словарь
     if len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
         raw = sys.argv[1]
         try:

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+*.egg-info/
+
+# Artifacts
+catboost_info/
+*.joblib
+*.cbm
+*.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Notebooks/experiments
+*.ipynb_checkpoints/
