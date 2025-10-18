@@ -4,10 +4,12 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import numpy as np
 import pandas as pd
-import io, os, json, math
+import io, os, json, math, inspect
 
 import joblib
 from catboost import CatBoostClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
 
 MODEL_CBM = os.getenv("MODEL_CBM", "autobid_catboost.cbm")
 FNAMES_JSON = os.getenv("FNAMES_JSON", "cb_feature_names.json")
@@ -43,20 +45,86 @@ def load_model():
         cb.load_model(MODEL_CBM)
         _cached_model = cb
         return _cached_model
-    raise FileNotFoundError("No acceptance model found (autobid_acceptance_model.joblib or CatBoost .cbm).")
+    raise FileNotFoundError("No acceptance model found.")
 
-FEATURES = ["price_start_local","pickup_in_meters","order_hour","order_dow","recommended_price_bid_local"]
+def _get_expected_feature_names(model) -> Optional[List[str]]:
+    try:
+        if isinstance(model, Pipeline):
+            for name, step in model.steps:
+                if isinstance(step, ColumnTransformer):
+                    if hasattr(step, "feature_names_in_"):
+                        return list(step.feature_names_in_)
+            if hasattr(model, "feature_names_in_"):
+                return list(model.feature_names_in_)
+        if isinstance(model, ColumnTransformer) and hasattr(model, "feature_names_in_"):
+            return list(model.feature_names_in_)
+    except Exception:
+        pass
+    return None
 
-def p_accept(model, row: Dict[str, Any], price: float) -> float:
+def _get_catboost_feature_names() -> Optional[List[str]]:
+    if os.path.exists(FNAMES_JSON):
+        try:
+            with open(FNAMES_JSON, "r", encoding="utf-8") as f:
+                arr = json.load(f)
+                if isinstance(arr, list) and all(isinstance(x, str) for x in arr):
+                    return arr
+        except Exception:
+            return None
+    return None
+
+MIN_KEYS = ["price_start_local","pickup_in_meters","order_hour","order_dow","recommended_price_bid_local"]
+
+def _row_to_sklearn_df(row: Dict[str, Any], price: float, expected_cols: List[str]) -> pd.DataFrame:
+    filled = {}
+    for col in expected_cols:
+        if col == "recommended_price_bid_local":
+            filled[col] = float(price)
+        elif col in row and row[col] is not None and row[col] != "":
+            filled[col] = row[col]
+        elif col == "pickup_in_meters":
+            filled[col] = row.get(col, 0)
+        elif col == "order_hour":
+            filled[col] = row.get(col, 12)
+        elif col == "order_dow":
+            filled[col] = row.get(col, 3)
+        else:
+            filled[col] = 0
+    if "recommended_price_bid_local" not in filled:
+        filled["recommended_price_bid_local"] = float(price)
+        df = pd.DataFrame([filled])
+        df = df[[*(expected_cols), "recommended_price_bid_local"]]
+        return df
+    return pd.DataFrame([filled])[expected_cols]
+
+def _row_to_catboost_matrix(row: Dict[str, Any], price: float, fname_order: Optional[List[str]]) -> np.ndarray:
     data = dict(row)
     data["recommended_price_bid_local"] = float(price)
-    X = [[float(data.get(k, 0)) for k in FEATURES]]
+    if fname_order:
+        return np.array([[data.get(k, 0) for k in fname_order]], dtype=float)
+    # fallback minimal
+    return np.array([[data.get(k, 0) for k in MIN_KEYS]], dtype=float)
+
+def p_accept(model, row: Dict[str, Any], price: float) -> float:
+    expected = _get_expected_feature_names(model)
+    if expected is not None:
+        X = _row_to_sklearn_df(row, price, expected)
+        try:
+            proba = model.predict_proba(X)[0][1]
+        except Exception:
+            pred = model.predict(X)
+            proba = float(pred) if np.ndim(pred)==0 else float(pred[0])
+        return max(0.0, min(1.0, float(proba)))
+    # catboost path
+    fname_order = _get_catboost_feature_names()
+    mat = _row_to_catboost_matrix(row, price, fname_order)
     try:
-        proba = model.predict_proba(X)[0][1]
+        cb_proba = model.predict_proba(mat)[0][1]
+        return max(0.0, min(1.0, float(cb_proba)))
     except Exception:
-        p = model.predict(X)
-        proba = float(p) if np.ndim(p) == 0 else float(p[0])
-    return max(0.0, min(1.0, float(proba)))
+        pred = model.predict(mat)
+        proba = float(pred) if np.ndim(pred)==0 else float(pred[0])
+        return max(0.0, min(1.0, float(proba)))
 
 def recommend_for_row(model, row: Dict[str, Any], grid=(0.8,1.6,0.02)):
     base = float(row.get("price_start_local", 300))
@@ -90,7 +158,7 @@ def haversine_meters(lat1, lng1, lat2, lng2):
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlng/2)**2
     return 2*R*math.asin(math.sqrt(a))
 
-app = FastAPI(title="AutoBid API (combined)", version="1.0.0")
+app = FastAPI(title="AutoBid API (combined patched)", version="1.1.0")
 router = APIRouter()
 
 @app.get("/health")
