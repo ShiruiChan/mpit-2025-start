@@ -5,18 +5,18 @@ import Spinner from "../components/Spinner";
 import mock from "../data/mockData";
 import Modal from "../components/Modal";
 
-type Props = { onDecline?: () => void };
+type Props = { onDecline?: () => void; onPropose?: (price: number) => void; lastStatus?: "new"|"proposed"|"accepted"|"rejected"; lastProposedPrice?: number | null; };
 function decide(prob: number) {
   return Math.random() * 100 < prob;
 }
 
-export default function Orders({ onDecline }: Props) {
+export default function Orders({ onDecline, onPropose, lastStatus, lastProposedPrice }: Props) {
   const { fromText, toText, basePrice } = mock;
 
-  /* настройки вероятностей */
-  const [uplift0, setUplift0] = useState(0); // было 0%
-  const [uplift1, setUplift1] = useState(5); // было +5%
-  const [uplift2, setUplift2] = useState(10); // было +10%
+  /* настройки вероятностей/надбавок */
+  const [uplift0, setUplift0] = useState(0);
+  const [uplift1, setUplift1] = useState(5);
+  const [uplift2, setUplift2] = useState(10);
   const [prob0, setProb0] = useState(60);
   const [prob5, setProb5] = useState(50);
   const [prob10, setProb10] = useState(40);
@@ -61,27 +61,21 @@ export default function Orders({ onDecline }: Props) {
   const p0 = Math.round(basePrice * (1 + uplift0 / 100));
   const p1 = Math.round(basePrice * (1 + uplift1 / 100));
   const p2 = Math.round(basePrice * (1 + uplift2 / 100));
-
   return [
-    { id: "base",   name: uplift0 === 0 ? "Начальная" : `На ${uplift0}% выше`, value: p0, label: `${p0} ₽`,  prob: prob0,  style: "green" },
-    { id: "p5",     name: `На ${uplift1}% выше`,                               value: p1, label: `${p1} ₽`,  prob: prob5,  style: "blue" },
-    { id: "p10",    name: `На ${uplift2}% выше`,                               value: p2, label: `${p2} ₽`,  prob: prob10, style: "red"  },
-    { id: "custom", name: "Своя цена",                                         value: NaN, label: "+",       prob: NaN,    style: ""     },
+    { id: "base",   name: "Аккуратный",  value: p0, label: `${p0} ₽`,  prob: prob0,  style: "green" },
+    { id: "p5",     name: "Оптимальный", value: p1, label: `${p1} ₽`,  prob: prob5,  style: "blue"  },
+    { id: "p10",    name: "Быстрый",     value: p2, label: `${p2} ₽`,  prob: prob10, style: "red"   },
+    { id: "custom", name: "Своя цена",   value: NaN, label: "+",       prob: NaN,    style: ""     },
   ];
 }, [basePrice, uplift0, uplift1, uplift2, prob0, prob5, prob10]);
 
-  /* выбор/статусы */
+  /* выбор/статусы локального UI */
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedPrice, setSelectedPrice] = useState<number | null>(null);
   const [selectedProb, setSelectedProb] = useState<number | null>(null);
-  const [status, setStatus] = useState<
-    "idle" | "sending" | "accepted" | "declined" | "error"
-  >("idle");
+  const [status, setStatus] = useState<"idle" | "sending" | "accepted" | "declined" | "error">("idle");
 
-  const selected = useMemo(
-    () => options.find((o) => o.id === selectedId) ?? null,
-    [options, selectedId]
-  );
+  const selected = useMemo(() => options.find(o => o.id === selectedId) ?? null, [options, selectedId]);
 
   const selectionText = useMemo(() => {
     if (!selected && selectedPrice == null) return null;
@@ -89,17 +83,6 @@ export default function Orders({ onDecline }: Props) {
     const price = selected?.value ?? selectedPrice!;
     return `Выбрано: “${name}” — ${price} ₽`;
   }, [selected, selectedPrice]);
-
-  // const pForBar = useMemo(() => {
-  //   const prob = selected?.prob ?? selectedProb ?? prob0;
-  //   return Math.max(0, Math.min(1, prob / 100));
-  // }, [selected, selectedProb, prob0]);
-
-  // const primaryLabel = useMemo(() => {
-  //   if (status === "sending") return "Отправка…";
-  //   if (selectedPrice != null) return `Предложить ${selectedPrice} ₽`;
-  //   return `Принять за ${basePrice} ₽`;
-  // }, [status, selectedPrice, basePrice]);
 
   function toggleScenario(id: string) {
     if (id === "custom") {
@@ -127,15 +110,14 @@ export default function Orders({ onDecline }: Props) {
     setStatus("idle");
   }
   async function onPrimary() {
-    // const offer = selectedPrice ?? basePrice;
-    const prob = selectedProb ?? prob0;
+    if (!selectedPrice) return;
     setStatus("sending");
     try {
-      await new Promise((res) => setTimeout(res, 900));
-      const ok = decide(prob);
-      setStatus(ok ? "accepted" : "declined");
+      await new Promise((res) => setTimeout(res, 300));
+      onPropose?.(selectedPrice);
+      setStatus("idle");
     } catch {
-      setStatus("error");
+      setStatus("idle");
     }
   }
 
@@ -164,32 +146,27 @@ export default function Orders({ onDecline }: Props) {
         </svg>
       </button>
 
-      {/* инфо: цена сверху не меняется */}
+      {/* инфо */}
       <OrderInfo fromText={fromText} toText={toText} price={basePrice} />
 
-      {/* подпись над полосой */}
-      {selectionText && (
-        <div className="text-sm text-neutral-600 -mt-2">{selectionText}</div>
-      )}
-
-      {/* полоса вероятности — БЕЗ текста снизу */}
+      {/* подпись */}
+      {selectionText && <div className="text-sm text-neutral-600 -mt-2">{selectionText}</div>}
 
       {/* чипы */}
       <div className="flex flex-wrap gap-2 mt-3">
-        {options.map((opt) => (
+        {options.map(opt => (
           <button
             key={opt.id}
             onClick={() => toggleScenario(opt.id)}
             disabled={status === "sending"}
-            className={`price-chip ${opt.style} ${
-              selectedId === opt.id ? "active" : ""
-            }`}
+            className={`price-chip ${opt.style} ${selectedId === opt.id ? "active" : ""}`}
             aria-pressed={selectedId === opt.id}
             title={opt.name}
           >
             {opt.label}
           </button>
         ))}
+        <button className="price-chip blue" onClick={() => toggleScenario("custom")}>Своя цена</button>
       </div>
 
       {/* статусы */}
@@ -198,14 +175,11 @@ export default function Orders({ onDecline }: Props) {
           <Spinner /> Отправка...
         </div>
       )}
-      {status === "accepted" && (
+      {lastStatus === "accepted" && (
         <div className="text-green-600 text-sm">Подтверждено заказчиком.</div>
       )}
-      {status === "declined" && (
+      {lastStatus === "rejected" && (
         <div className="text-orange-600 text-sm">Не подтверждено.</div>
-      )}
-      {status === "error" && (
-        <div className="text-red-500 text-sm">Ошибка при отправке</div>
       )}
 
       {/* ЛИПКИЙ футер с кнопками — ВСЕГДА ВЛЕЗАЕТ */}
@@ -232,7 +206,7 @@ export default function Orders({ onDecline }: Props) {
         </div>
       </div>
 
-      {/* Кастомная цена (модалка — через портал в #modal-root) */}
+      {/* Кастомная цена */}
       <CustomPriceModal
         open={selectedId === "custom"}
         basePrice={basePrice}
@@ -240,17 +214,17 @@ export default function Orders({ onDecline }: Props) {
         onConfirm={(price) => onCustom(price)}
       />
 
-      {/* Настройки надбавок (модалка) */}
+      {/* Настройки надбавок */}
       <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} ariaLabel="Настройки сценариев">
-        <div className="p-4">
-          <div className="text-lg font-semibold mb-3">Настройки сценариев</div>
-          <div className="space-y-3">
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-sm text-neutral-700">Надбавка #1</span>
-              <div className="flex items-center gap-1">
+        <div className="space-y-4">
+          <h2 className="text-lg font-semibold">Настройки сценариев</h2>
+
+          <div className="grid grid-cols-1 gap-4">
+            <label className="block">
+              <div className="text-sm font-medium mb-1">Надбавка 1</div>
+              <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  min={-100} max={200} step={1}
                   value={uplift0}
                   onChange={e => setUplift0(Number(e.target.value))}
                   className="w-24 border rounded px-2 py-1 text-right"
@@ -260,12 +234,11 @@ export default function Orders({ onDecline }: Props) {
               </div>
             </label>
 
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-sm text-neutral-700">Надбавка #2</span>
-              <div className="flex items-center gap-1">
+            <label className="block">
+              <div className="text-sm font-medium mb-1">Надбавка 2</div>
+              <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  min={-100} max={200} step={1}
                   value={uplift1}
                   onChange={e => setUplift1(Number(e.target.value))}
                   className="w-24 border rounded px-2 py-1 text-right"
@@ -275,16 +248,59 @@ export default function Orders({ onDecline }: Props) {
               </div>
             </label>
 
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-sm text-neutral-700">Надбавка #3</span>
-              <div className="flex items-center gap-1">
+            <label className="block">
+              <div className="text-sm font-medium mb-1">Надбавка 3</div>
+              <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  min={-100} max={200} step={1}
                   value={uplift2}
                   onChange={e => setUplift2(Number(e.target.value))}
                   className="w-24 border rounded px-2 py-1 text-right"
                   aria-label="Надбавка 3 в процентах"
+                />
+                <span>%</span>
+              </div>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4">
+            <label className="block">
+              <div className="text-sm font-medium mb-1">Вероятность принятия 1</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={prob0}
+                  onChange={e => setProb0(Number(e.target.value))}
+                  className="w-24 border rounded px-2 py-1 text-right"
+                  aria-label="Вероятность принятия 1 в процентах"
+                />
+                <span>%</span>
+              </div>
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium mb-1">Вероятность принятия 2</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={prob5}
+                  onChange={e => setProb5(Number(e.target.value))}
+                  className="w-24 border rounded px-2 py-1 text-right"
+                  aria-label="Вероятность принятия 2 в процентах"
+                />
+                <span>%</span>
+              </div>
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium mb-1">Вероятность принятия 3</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={prob10}
+                  onChange={e => setProb10(Number(e.target.value))}
+                  className="w-24 border rounded px-2 py-1 text-right"
+                  aria-label="Вероятность принятия 3 в процентах"
                 />
                 <span>%</span>
               </div>

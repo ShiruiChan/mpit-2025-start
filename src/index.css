@@ -326,3 +326,33 @@ body {
 @media (max-width: 420px) {
   .modal-card { border-radius: 16px; }
 }
+
+/* ===== Переключатель роли (водитель/заказчик) ===== */
+.role-switch{
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--surface-contrast) 16%, transparent);
+  box-shadow: 0 2px 10px rgba(0,0,0,.08);
+  backdrop-filter: blur(6px);
+}
+.role-btn{
+  appearance: none;
+  border: 0;
+  padding: 6px 10px;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-primary);
+  background: transparent;
+  transition: all .15s ease;
+}
+.role-btn.active{
+  color: #fff;
+  background: var(--surface-contrast);
+  box-shadow: 0 1px 6px rgba(0,0,0,.18) inset;
+}
+.role-btn:hover{ opacity:.92; }
+.role-btn:active{ transform: translateY(1px); }
