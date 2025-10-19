@@ -15,7 +15,7 @@ FEATURES = None
 CAT_COLS = ["carmodel", "carname", "platform"]
 CAT_IDX  = []
 
-# ---------- Вспомогательное: даты -> фичи ----------
+# === Вспомогательное: даты -> фичи === 
 def _as_dt(df, col):
     if col in df.columns:
         df[col] = pd.to_datetime(df[col], errors="coerce")
@@ -34,7 +34,7 @@ def build_features_df(df: pd.DataFrame) -> pd.DataFrame:
     df["centrality_proxy"] = -df.get("pickup_in_meters", pd.Series([np.nan]*len(df)))
     return df
 
-# ---------- Нормализация одной заявки ----------
+# === Нормализация одной заявки ===
 def ensure_all_features(row: pd.Series) -> pd.Series:
     """Заполнить недостающие фичи дефолтами + привести категории к строкам."""
     defaults_num = {
@@ -51,7 +51,6 @@ def ensure_all_features(row: pd.Series) -> pd.Series:
         if k not in row:
             row[k] = v
 
-    # производные
     if pd.isna(row["price_bid_local"]) and not pd.isna(row["price_start_local"]):
         row["price_bid_local"] = row["price_start_local"]
     if pd.isna(row["bid_uplift_abs"]) and not pd.isna(row["price_bid_local"]) and not pd.isna(row["price_start_local"]):
@@ -85,11 +84,10 @@ def build_predict_df(row: dict) -> pd.DataFrame:
             X[c] = X[c].astype(str).fillna("unknown")
     return X
 
-# ---------- Модель / артефакты ----------
+# === Модель / артефакты ===
 def load_or_train_model():
     global FEATURES, CAT_IDX
     if not os.path.exists(MODEL_CBM):
-        # обучаем на лету (скрипт создаст .cbm и .json)
         os.system("python catboost_train.py")
     if not os.path.exists(MODEL_CBM):
         raise FileNotFoundError("Нет модели autobid_catboost.cbm. Убедись, что catboost_train.py отработал успешно.")
@@ -106,7 +104,7 @@ def load_or_train_model():
     CAT_IDX = [FEATURES.index(c) for c in CAT_COLS if c in FEATURES]
     return model
 
-# ---------- Поиск «золота»: recommend_bid ----------
+# === Поиск «золота»: recommend_bid ===
 def recommend_bid(row: pd.Series, model, price_grid_pct=np.arange(0.85, 1.401, 0.05)):
     """
     Перебираем цену вокруг старта и ищем максимум ER = price * P(accept).
@@ -135,14 +133,14 @@ def recommend_bid(row: pd.Series, model, price_grid_pct=np.arange(0.85, 1.401, 0
 
     return best
 
-# ---------- «Говорящая» фраза ----------
+# === «Говорящая» фраза ===
 def mood_phrase(p):
     if p >= 0.65: return "💬 Отличный шанс!"
     if p >= 0.50: return "💬 Нормально, средний риск."
     if p >= 0.35: return "💬 Осторожно: может не зайти."
     return "💬 Сомнительно — лучше снизить цену."
 
-# ---------- Таблица ----------
+# === Таблица ===
 def print_table(headers, rows):
     widths = [len(h) for h in headers]
     for r in rows:
@@ -154,7 +152,7 @@ def print_table(headers, rows):
     for r in rows: print(fmt_row(r))
     print(line())
 
-# ---------- Парсинг аргументов ----------
+# === Парсинг аргументов ===
 def parse_args_payload():
     if len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
         raw = sys.argv[1]
@@ -172,15 +170,12 @@ def parse_args_payload():
     args, _ = p.parse_known_args()
     payload = {k:v for k,v in vars(args).items() if v is not None}
     if payload: return payload
-    # 3) Дефолт
     return {"price_start_local":300,"pickup_in_meters":400,"order_hour":18,"order_dow":4}
 
-# ---------- main ----------
+# === main ===
 def main():
-    # загрузить/обучить модель
     model = load_or_train_model()
 
-    # собрать заявку
     payload = parse_args_payload()
     row = pd.Series(payload)
     if "price_bid_local" not in row:
@@ -191,7 +186,6 @@ def main():
         row["order_dow"] = payload.get("order_timestamp_dow", payload.get("order_dow", 3))
     row["is_weekend"] = int(int(row["order_dow"]) in (5,6))
 
-    # оптимум
     best = recommend_bid(row, model)
     start = float(row["price_start_local"])
     uplift_pct = (best["price"]/start - 1.0)*100.0 if start>0 else 0.0
@@ -203,8 +197,7 @@ def main():
     print_table(headers, rows)
     print(mood_phrase(best["p_accept"]))
 
-    # три сценария
-    tiers = [0.95, 1.00, 1.05]  # conservative / optimal / bold
+    tiers = [0.95, 1.00, 1.05]
     rows_out = []
     for t in tiers:
         price = start * t

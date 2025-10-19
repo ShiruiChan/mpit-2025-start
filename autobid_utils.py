@@ -23,7 +23,6 @@ def _prepare_te_maps(te_maps_raw: dict) -> dict:
     te = {}
     for idc, obj in (te_maps_raw or {}).items():
         raw_map = obj.get("map", {})
-        # Ключи уже строки после JSON, просто убеждаемся и приводим значения к float один раз
         te[idc] = {
             "map": {str(k): float(v) for k, v in raw_map.items()},
             "prior": float(obj.get("prior", 0.5))
@@ -33,23 +32,19 @@ def _prepare_te_maps(te_maps_raw: dict) -> dict:
 def _coerce_dtypes_for_infer(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # ЧИСЛОВЫЕ: обрабатываем через ndarray, чтобы не трогать Series.name
     for c in NUM_SAFE:
         if c in df.columns:
             arr = pd.to_numeric(np.asarray(df[c]), errors="coerce")
             df.loc[:, c] = arr.astype("float64")
 
-    # TE-колонки -> float64 (тоже через ndarray)
     for c in list(df.columns):
         if isinstance(c, str) and c.startswith("te_"):
             arr = pd.to_numeric(np.asarray(df[c]), errors="coerce")
             df.loc[:, c] = arr.astype("float64")
 
-    # КАТЕГОРИАЛЬНЫЕ: object-строки, но NaN оставляем NaN
     for c in RAW_CAT:
         if c in df.columns:
             mask = df[c].notna()
-            # только не-NaN приводим к str; NaN оставляем как есть
             df.loc[mask, c] = df.loc[mask, c].astype(str)
             df.loc[:, c] = df[c].astype("object")
 
@@ -78,7 +73,7 @@ def load_artifacts(model_path="autobid_catboost.cbm",
     try:
         with open(te_maps_json, "r", encoding="utf-8") as f:
             te_maps_raw = json.load(f)
-        te_maps = _prepare_te_maps(te_maps_raw)   # <<< ПОДГОТОВКА ОДИН РАЗ
+        te_maps = _prepare_te_maps(te_maps_raw)
     except Exception:
         te_maps = {}
 
@@ -111,7 +106,7 @@ def apply_te_maps(df: pd.DataFrame, te_maps: dict) -> pd.DataFrame:
     df = df.copy()
     for idc in ID_COLS:
         if idc in df.columns and idc in te_maps:
-            m = te_maps[idc]["map"]      # уже готовый dict[str, float]
+            m = te_maps[idc]["map"]
             prior = te_maps[idc]["prior"]
             df[f"te_{idc}"] = (
                 df[idc].astype(str).map(m).fillna(prior).astype(float)
@@ -126,20 +121,16 @@ def build_features_df(df: pd.DataFrame, te_maps: dict) -> pd.DataFrame:
 def _coerce_dtypes_for_infer(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # числовые -> float64 (если есть)
     for c in NUM_SAFE:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
 
-    # TE-колонки -> float64
     for c in df.columns:
         if c.startswith("te_"):
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
 
-    # категорические -> object (строки), но не превращаем NaN в "nan"
     for c in RAW_CAT:
         if c in df.columns:
-            # где не NaN — к строке, где NaN — оставим NaN
             mask = df[c].notna()
             df.loc[mask, c] = df.loc[mask, c].astype(str)
             df[c] = df[c].astype("object")
@@ -150,7 +141,6 @@ def predict_accept_prob(df_features: pd.DataFrame, model, fns: dict, calibrator=
     needed = fns["cat"] + fns["num"]
     X = df_features.reindex(columns=needed)
 
-    # создать отсутствующие колонки
     for c in needed:
         if c not in X.columns:
             X[c] = 0.0 if (isinstance(c, str) and c.startswith("te_")) else np.nan
@@ -163,7 +153,6 @@ def predict_accept_prob(df_features: pd.DataFrame, model, fns: dict, calibrator=
 
     p = model.predict_proba(pool)[:, 1]
 
-    # защита от NaN/inf перед калибровкой
     p = np.asarray(p, dtype="float64")
     bad = ~np.isfinite(p)
     if bad.any():
@@ -176,14 +165,11 @@ def predict_accept_prob(df_features: pd.DataFrame, model, fns: dict, calibrator=
     return p
 
 def _recompute_price_fields(df_row: pd.DataFrame) -> pd.DataFrame:
-    # df_row — DataFrame с ОДНОЙ строкой
     idx = df_row.index[0]
 
-    # читаем как float, НЕ меняя тип всей колонки
     start = float(df_row.at[idx, "price_start_local"]) if "price_start_local" in df_row.columns else float("nan")
     bid   = float(df_row.at[idx, "price_bid_local"])   if "price_bid_local" in df_row.columns else float("nan")
 
-    # пишем ТОЛЬКО нужные ячейки
     uplift_abs = bid - start if (start == start and bid == bid) else 0.0  # NaN-safe
     df_row.at[idx, "bid_uplift_abs"] = float(uplift_abs)
 
@@ -192,7 +178,6 @@ def _recompute_price_fields(df_row: pd.DataFrame) -> pd.DataFrame:
     else:
         df_row.at[idx, "bid_uplift_pct"] = 0.0
 
-    # на всякий случай: никаких массовых astype тут НЕ делаем
     return df_row
 
 def recommend_bid_for_row(row, model, fns, calibrator=None, te_maps=None, price_grid_pct=None):
@@ -202,14 +187,11 @@ def recommend_bid_for_row(row, model, fns, calibrator=None, te_maps=None, price_
     if te_maps is None:
         te_maps = {}
 
-    # 1) Построим БАЗОВЫЕ фичи и TE один раз
     base = pd.DataFrame([row.copy()])
-    feat_base = build_base_features(base)      # твоя базовая функция (без TE)
+    feat_base = build_base_features(base)
     feat_base = apply_te_maps(feat_base, te_maps)
 
-    # 2) Готовим фрейм нужных столбцов под модель
     needed = fns["cat"] + fns["num"]
-    # Если каких-то колонок нет, добавим безопасные значения
     if "price_bid_local" in feat_base.columns:
       feat_base["price_bid_local"] = pd.to_numeric(feat_base["price_bid_local"], errors="coerce").astype("float64")
       
@@ -224,12 +206,10 @@ def recommend_bid_for_row(row, model, fns, calibrator=None, te_maps=None, price_
     best = {"price": None, "p_accept": None, "er": -1.0}
 
     for k in price_grid_pct:
-        # 3) Клонируем только ОДНУ строку признаков и обновляем ТОЛЬКО ценовые поля
         f = feat_base.copy()
         f.at[f.index[0], "price_bid_local"] = float(start * k)
         f = _recompute_price_fields(f)
 
-        # 4) Подгоняем порядок колонок
         p = predict_accept_prob(f, model, fns, calibrator)
         p1 = float(p[0])
         er = float(f.at[f.index[0], "price_bid_local"] * p1)

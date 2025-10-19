@@ -30,11 +30,9 @@ def _as_dt(df, col):
 
 def build_features_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # Clean garbage columns
     for c in df.columns:
         if c.lower().startswith("unnamed"):
             df = df.drop(columns=[c])
-    # Dates -> derived features
     for c in ["order_timestamp","tender_timestamp","driver_reg_date"]:
         _as_dt(df, c)
     df["order_hour"] = df["order_timestamp"].dt.hour
@@ -43,11 +41,9 @@ def build_features_df(df: pd.DataFrame) -> pd.DataFrame:
     df["lag_tender_seconds"] = (df["tender_timestamp"] - df["order_timestamp"]).dt.total_seconds()
     df["lag_tender_seconds"] = df["lag_tender_seconds"].fillna(0).clip(lower=0)
     df["driver_tenure_days"] = (df["order_timestamp"] - df["driver_reg_date"]).dt.total_seconds() / 86400.0
-    # Price features
     df["bid_uplift_abs"] = df["price_bid_local"] - df["price_start_local"]
     df["bid_uplift_pct"] = df["bid_uplift_abs"] / df["price_start_local"].replace(0, np.nan)
     df["bid_uplift_pct"] = df["bid_uplift_pct"].replace([np.inf, -np.inf], np.nan).fillna(0)
-    # Centrality proxy from pickup distance
     df["centrality_proxy"] = np.exp(- df["pickup_in_meters"].fillna(0) / 1000.0)
     return df
 
@@ -63,7 +59,6 @@ def cv_target_encode(train_df, col, y, n_splits=5, min_samples=20, prior=0.5):
         fold_map = stats["enc"].to_dict()
         enc[val_idx] = train_df.iloc[val_idx][col].map(fold_map).fillna(prior).values
         global_map.update(fold_map)
-    # Also store a global default prior
     return enc, global_map, prior
 
 def main():
@@ -73,7 +68,6 @@ def main():
     df_feat = build_features_df(df)
 
     te_maps = {}
-    # Leakage‑safe encodings for IDs
     for idc in ID_COLS:
         if idc in df_feat.columns:
             enc, gmap, prior = cv_target_encode(
@@ -92,24 +86,21 @@ def main():
     ] if c in df_feat.columns]
 
     X = df_feat[cat_cols + num_cols]
-    # Train/holdout for calibration
     from sklearn.model_selection import train_test_split
     X_train, X_cal, y_train, y_cal = train_test_split(X, y, test_size=0.15, random_state=42, stratify=y)
 
-    # Monotonic constraint
     mono = []
     for col in cat_cols:
         mono.append(0)
     for col in num_cols:
         if col in ["price_bid_local","bid_uplift_abs","bid_uplift_pct"]:
-            mono.append(-1)  # non-increasing
+            mono.append(-1)
         else:
             mono.append(0)
 
     train_pool = Pool(X_train, y_train, cat_features=[X.columns.get_loc(c) for c in cat_cols])
     cal_pool   = Pool(X_cal, y_cal,   cat_features=[X.columns.get_loc(c) for c in cat_cols])
 
-    # class weights: inverse frequency
     pos_w = (len(y) - y.sum()) / y.sum()
     model = CatBoostClassifier(
         loss_function="Logloss",
@@ -126,9 +117,7 @@ def main():
         scale_pos_weight=pos_w
     )
     model.fit(train_pool, eval_set=cal_pool, verbose=200)
-    # Raw probs
     p_raw = model.predict_proba(cal_pool)[:,1]
-    # Isotonic calibration
     iso = IsotonicRegression(out_of_bounds="clip")
     iso.fit(p_raw, y_cal)
     p_cal = iso.transform(p_raw)

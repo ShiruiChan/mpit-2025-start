@@ -13,9 +13,9 @@ FNAMES_JSON = os.environ.get("FNAMES_JSON", "cb_feature_names.json")
 TRAIN_PATH  = os.environ.get("TRAIN_PATH", "train.csv")
 
 # === полезные константы ===
-CAT_COLS = ["carmodel","carname","platform"]  # категориальные — обязательно строки, без NaN
+CAT_COLS = ["carmodel","carname","platform"]
 
-# -------------------- utils --------------------
+# === Утилиты ===
 
 def _as_dt(df, col):
     if col in df.columns:
@@ -33,12 +33,10 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["lag_tender_seconds"] = df["lag_tender_seconds"].fillna(0).clip(lower=0)
     df["driver_tenure_days"] = (df["order_timestamp"] - df["driver_reg_date"]).dt.days
     df["driver_tenure_days"] = df["driver_tenure_days"].fillna(0).clip(lower=0)
-    # производные для цены
     if "price_start_local" in df.columns and "price_bid_local" in df.columns:
         df["bid_uplift_abs"] = df["price_bid_local"] - df["price_start_local"]
         with np.errstate(divide='ignore', invalid='ignore'):
             df["bid_uplift_pct"] = df["bid_uplift_abs"] / df["price_start_local"]
-    # центральность: ближе подача → "центральнее"
     if "pickup_in_meters" in df.columns:
         df["centrality_proxy"] = -df["pickup_in_meters"]
     return df
@@ -50,7 +48,6 @@ def ensure_row(row: dict, FEATURES: list) -> pd.DataFrame:
     """Собрать одну строку признаков под CatBoost (cat -> str, NaN -> 'unknown')."""
     start = row["price_start_local"]
 
-    # разумные дефолты
     row.setdefault("price_bid_local", start)
     row.setdefault("order_dow", 3)
     row.setdefault("order_hour", 12)
@@ -61,19 +58,16 @@ def ensure_row(row: dict, FEATURES: list) -> pd.DataFrame:
     row.setdefault("lag_tender_seconds", 0.0)
     row.setdefault("driver_tenure_days", 0.0)
 
-    # производные
     row["bid_uplift_abs"] = row["price_bid_local"] - start
     row["bid_uplift_pct"] = (row["bid_uplift_abs"] / start) if start and start>0 else 0.0
     row.setdefault("centrality_proxy", -row.get("pickup_in_meters", np.nan))
 
-    # категории → строки без NaN
     for c in CAT_COLS:
         v = row.get(c, "unknown")
         if pd.isna(v):
             v = "unknown"
         row[c] = str(v)
 
-    # собрать DF в нужном порядке
     feat_row = {f: row.get(f, np.nan) for f in FEATURES}
     X = pd.DataFrame([feat_row], columns=FEATURES)
     for c in CAT_COLS:
@@ -81,7 +75,7 @@ def ensure_row(row: dict, FEATURES: list) -> pd.DataFrame:
             X[c] = X[c].astype(str).fillna("unknown")
     return X
 
-# -------------------- cached loaders --------------------
+# === cached loaders ===
 
 @st.cache_data
 def load_data(train_path: str):
@@ -106,21 +100,18 @@ def load_model_and_features(model_path: str, fnames_json: str):
     model.load_model(model_path)
     with open(fnames_json, "r", encoding="utf-8") as f:
         FEATURES = json.load(f)
-    # индексы категорий
     cat_idx = [FEATURES.index(c) for c in CAT_COLS if c in FEATURES]
     return model, FEATURES, cat_idx
 
-# -------------------- main app --------------------
+# === main app ===
 
 def main():
     st.set_page_config(page_title="AutoBid — Drivee", layout="wide")
     st.title("AutoBid — умный авто-бидинг для Drivee")
 
-    # данные + модель
     df = load_data(TRAIN_PATH)
     model, FEATURES, CAT_IDX = load_model_and_features(MODEL_CBM, FNAMES_JSON)
 
-    # ===== верхняя панель ввода =====
     col1, col2, col3, col4, col5 = st.columns([1.3,1.3,1,1,1.4])
     with col1:
         start = st.number_input("Стартовая цена, ₽", value=300.0, step=5.0, min_value=1.0)
@@ -136,18 +127,15 @@ def main():
 
     st.markdown("---")
 
-    # ===== теплокарта спроса (количество заказов) =====
     st.subheader("📈 Теплокарта спроса (кол-во заказов)")
     heat = df.groupby(["order_dow","order_hour"]).size().reset_index(name="count")
     heat_pivot = heat.pivot(index="order_dow", columns="order_hour", values="count").fillna(0)
     st.dataframe(heat_pivot.style.format("{:.0f}"), height=260, use_container_width=True)
 
-    # ===== ER-кривая (классическая и с fairness) =====
     st.subheader("💰 Ожидаемая выручка vs цена")
     pct_grid = np.linspace(0.8, 1.4, 25)
     prices, probs, ers, ers_fair = [], [], [], []
 
-    # fairness: усиливаем окраины относительно медианы подач
     if "pickup_in_meters" in df.columns and df["pickup_in_meters"].notna().any():
         q50 = float(df["pickup_in_meters"].median())
     else:
@@ -164,7 +152,6 @@ def main():
             "order_dow": int(dow)
         }
         X = ensure_row(row, FEATURES)
-        # catboost предпочтительно кормить через Pool с cat_features
         p = float(model.predict_proba(Pool(X, cat_features=[FEATURES.index(c) for c in CAT_COLS if c in FEATURES]))[0,1])
         er = price * p
         er_fair = er * (1 + w_outskirts * fairness_boost)
@@ -177,7 +164,6 @@ def main():
     st.plotly_chart(fig, use_container_width=True)
     st.caption("ER_fair — учитывает мягкую поддержку окраин: даже если центр выигрывает, окраины тоже получают шанс.")
 
-    # ===== Рекомендации (классика и fairness) =====
     idx_opt  = int(np.argmax(df_plot["ER"].values))
     idx_fair = int(np.argmax(df_plot["ER_fair"].values))
     p_opt, p_fair = df_plot.loc[idx_opt], df_plot.loc[idx_fair]
@@ -190,7 +176,6 @@ def main():
         st.metric("Рекоменд. цена (с fairness)", f"{p_fair['price']:.0f} ₽",
                   help=f"P(accept)={probs[idx_fair]:.3f}, ER_fair={p_fair['ER_fair']:.2f}")
     with c3:
-        # быстрая «говорящая» фраза по вероятности в fairness-точке
         pa = probs[idx_fair]
         if pa >= 0.65: txt = "💬 Отличный шанс!"
         elif pa >= 0.50: txt = "💬 Нормально, средний риск."
@@ -198,7 +183,6 @@ def main():
         else: txt = "💬 Сомнительно — лучше снизить цену."
         st.success(txt)
 
-    # ===== три сценария =====
     st.subheader("🎯 Сценарии: Conservative / Optimal / Bold")
     tiers = [0.95, 1.00, 1.05]
     rows_tbl = []
@@ -228,13 +212,11 @@ def main():
 
     st.markdown("---")
 
-    # ===== SHAP: "почему именно такая цена" =====
     with st.expander("🔍 Почему именно такая цена? (SHAP объяснение)"):
         st.markdown("Модель объясняет вклад каждого признака в вероятность принятия для выбранной конфигурации.")
         try:
             import shap
             import matplotlib.pyplot as plt
-            # Берём точку с fairness (можешь переключить на p_opt['price'])
             X_one = ensure_row({
                 "price_start_local": start,
                 "price_bid_local": float(p_fair["price"]),
@@ -242,17 +224,14 @@ def main():
                 "order_hour": int(hour),
                 "order_dow": int(dow)
             }, FEATURES)
-            # TreeExplainer для CatBoost
             explainer = shap.TreeExplainer(model)
             shap_values = explainer.shap_values(X_one)
-            # Для бинарной задачи CatBoost может вернуть список из 2 массивов [class0, class1]
             if isinstance(shap_values, list):
                 sv = shap_values[1]
                 base_val = explainer.expected_value[1]
             else:
                 sv = shap_values
                 base_val = explainer.expected_value
-            # Рисуем waterfall
             fig_shap = plt.figure(figsize=(8, 6))
             shap.plots._waterfall.waterfall_legacy(
                 shap.Explanation(
@@ -271,6 +250,6 @@ def main():
 
     st.info("Fairness-вес позволяет не игнорировать окраины: даже если центр даёт лучший ER, система мягко поддерживает дальние подачи.")
 
-# -------------------- run --------------------
+# === run ===
 if __name__ == "__main__":
     main()

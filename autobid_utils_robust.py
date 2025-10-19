@@ -2,6 +2,8 @@ import os, sys, json
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Optional
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
 try:
     import joblib
@@ -13,13 +15,10 @@ try:
 except Exception:
     CatBoostClassifier = None
 
-# -------------------------
-# Logging
-# -------------------------
-VERBOSE = os.environ.get("AUTOBID_VERBOSE", "1") not in ("0", "false", "False")
+VERY_VERBOSE = os.environ.get("AUTOBID_VERY_VERBOSE", "0") in ("1","true","True")
 def _log(msg: str):
-    if VERBOSE:
-        print(f"[autobid] {msg}", file=sys.stderr, flush=True)
+    if VERY_VERBOSE:
+    	_log(f"Predict on shape={X.shape}; cats={len(fns.get('cat', []))}, nums={len(fns.get('num', []))}")
 
 def _ensure_str_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Привести ВСЕ имена колонок к строкам
@@ -27,6 +26,12 @@ def _ensure_str_columns(df: pd.DataFrame) -> pd.DataFrame:
         df = df.rename(columns=lambda c: str(c))
     return df
 
+def _ensure_float64_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Гарантированно создаёт столбец col как float64 и не даёт ему остаться int-блоком."""
+    if col not in df.columns:
+        df.insert(len(df.columns), col, np.nan, allow_duplicates=False)
+    df.loc[:, col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
+    return df
 
 def load_artifacts(
     model_path: str = "autobid_catboost.cbm",
@@ -152,6 +157,7 @@ def _recompute_price_fields(df: pd.DataFrame) -> pd.DataFrame:
 def recommend_bid_for_row(row: pd.Series, model, fns, calibrator=None, te_maps: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
     base = build_features_df(pd.DataFrame([row]), te_maps or {})
     base = base.reset_index(drop=True)
+    base = df_features.copy(deep=True)
     idx0 = base.index[0]
     for c in ("price_bid_local", "price_start_local", "bid_uplift_abs"):
         if c in base.columns:
@@ -169,25 +175,42 @@ def recommend_bid_for_row(row: pd.Series, model, fns, calibrator=None, te_maps: 
 
     ks = np.arange(0.75, 1.601, 0.025)
 
-    best_price, best_p, best_er = start, 0.0, -np.inf
-    base = base.copy(deep=True)  # безопасная база
+    best_price = None
+    best_p = None
+    best_er = -1e300
+    base = base.copy(deep=True)
     col = "price_bid_local"
+    base = _ensure_float64_column(base, col)
     if col not in base.columns:
       base[col] = np.nan
     base.loc[:, col] = pd.to_numeric(base[col], errors="coerce").astype("float64")
     for k in ks:
-      price = float(start * k)                # 1) считаем цену
-      f = base.copy(deep=True)                # 2) берём копию
-      idx = f.index[0]
-      f.at[idx, "price_bid_local"] = price    # 3) записываем цену (dtype уже float64)
-      f = _recompute_price_fields(f)
-      if "bid_uplift_abs" in f.columns:
-        f.at[idx, "bid_uplift_abs"] = float(price - start)
-        p = predict_accept_prob(f, model, fns, calibrator)[0]
-        er = float(price * p)
-        if er > best_er:
-          best_price, best_p, best_er = price, p, er
-          best_price, best_p, best_er = price, p, er
-    _log(f"Best: k={best_price/(start or 1.0):.3f}, price={best_price:.2f}, p={best_p:.4f}, ER={best_er:.2f}")
+        price = float(start * k)
+        f = base.copy(deep=True)
+        f = _ensure_float64_column(f, col)
 
-    return {"price": float(best_price), "p_accept": float(best_p), "er": float(best_er)}
+        idx = f.index[0]
+        f.at[idx, col] = price
+        if "bid_uplift_abs" in f.columns:
+            f.at[idx, "bid_uplift_abs"] = float(price - start)
+
+        # предсказание
+        p = predict_accept_prob(f, model, fns, calibrator)[0]
+        if p is None or not np.isfinite(p):
+            continue
+        if p < 0:
+            p = 0.0
+        if p > 1:
+            p = 1.0
+
+        er = price * p
+        if not np.isfinite(er):
+            continue
+
+        if er > best_er:
+            best_price, best_p, best_er = price, p, er
+
+    if best_price is None:
+        best_price, best_p, best_er = float(start), 0.0, float(start) * 0.0
+
+    return best_price, best_p, best_er

@@ -41,24 +41,20 @@ def main():
     df = pd.read_csv(TRAIN_PATH)
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
     df = build_features(df)
-    X = df[FEATURES].head(5000)  # хватит для summary
+    X = df[FEATURES].head(5000)
     pool = Pool(X, cat_features=cat_idx)
 
-    # SHAP values (CatBoost поддерживает напрямую)
     shap_values = model.get_feature_importance(pool, type="ShapValues")
-    # Последний столбец — base value; убираем
     sv = shap_values[:, :-1]
 
-    # Summary bar
     plt.figure(figsize=(10,6))
     shap.summary_plot(sv, features=X, feature_names=FEATURES, plot_type="bar", show=False)
     plt.tight_layout()
     plt.savefig("shap_summary.png", dpi=200)
     plt.close()
 
-    # Waterfall для первой строки
     explainer = shap.TreeExplainer(model)
-    one_sv = explainer.shap_values(X.iloc[[0]])  # список из 2 классов; берём положительный (класс=1)
+    one_sv = explainer.shap_values(X.iloc[[0]])
     if isinstance(one_sv, list):
         one_sv = one_sv[1]
     shap.plots._waterfall.waterfall_legacy(
