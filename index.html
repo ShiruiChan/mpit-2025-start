@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Drivee • Assistant</title>
+
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('drivee.theme');
+          var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.dataset.theme = theme;
+        } catch(e) {}
+      })();
+    </script>
+
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  </head>
+  <body class="bg-neutral-900 flex items-center justify-center min-h-screen overflow-hidden">
+    <div id="app-shell"
+      style="
+        width: 375px;
+        height: 812px;
+        border-radius: 40px;
+        overflow: hidden;
+        box-shadow: 0 0 0 12px #000, 0 0 40px rgba(0,0,0,0.6);
+        background: #f8fafb;
+        position: relative;
+      ">
+      <div id="root" class="h-full"></div>
+    </div>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
